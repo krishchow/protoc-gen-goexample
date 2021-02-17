@@ -12,3 +12,5 @@
 *.out
 
 protoc-gen-goexample
+.idea
+vendor

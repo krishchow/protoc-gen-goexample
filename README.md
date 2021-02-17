@@ -8,7 +8,7 @@ go build .
 
 ## Run the plugin
 ```
-protoc --plugin protoc-gen-goexample --goexample_out=output example.proto
+protoc --plugin protoc-gen-gofake --gofake_out=package=example,packagePath=github.com/krishchow/protoc-gen-gofake:fake example.proto
 ```
 
 ## Passing additional data to generators

@@ -31,7 +31,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/golang/protobuf/proto"
-	descriptor "github.com/golang/protobuf/protoc-gen-go/descriptor"
 	plugin "github.com/golang/protobuf/protoc-gen-go/plugin"
 )
 
@@ -41,10 +40,15 @@ type GoExample struct {
 	Parameters map[string]string
 }
 
-type LocationMessage struct {
-	Location        *descriptor.SourceCodeInfo_Location
-	Message         *descriptor.DescriptorProto
-	LeadingComments []string
+type FakeService struct {
+	Name string
+	Methods []Method
+}
+
+type Method struct {
+	Name string
+	Input string
+	Output string
 }
 
 func (runner *GoExample) PrintParameters(w io.Writer) {
@@ -58,81 +62,90 @@ func (runner *GoExample) PrintParameters(w io.Writer) {
 	tw.Flush()
 }
 
-func (runner *GoExample) getLocationMessage() map[string][]*LocationMessage {
+func cleanInput(val string) string {
+	spl := strings.Split(val, ".")
+	return spl[len(spl)-1]
+}
 
-	ret := make(map[string][]*LocationMessage)
-	for index, filename := range runner.Request.FileToGenerate {
-		locationMessages := make([]*LocationMessage, 0)
-		proto := runner.Request.ProtoFile[index]
-		desc := proto.GetSourceCodeInfo()
-		locations := desc.GetLocation()
-		for _, location := range locations {
-			// I would encourage developers to read the documentation about paths as I might have misunderstood this
-			// I am trying to process message types which I understand to be `4` and only at the root level which I understand
-			// to be path len == 2
-			if len(location.GetPath()) > 2 {
-				continue
+func (runner *GoExample) getLocationMessage() map[string][]*FakeService {
+	ret := make(map[string][]*FakeService)
+	for _, protoFile := range runner.Request.ProtoFile {
+		_, _ = fmt.Fprintf(os.Stderr, "%s\n", *protoFile.Name)
+		fakeServices := make([]*FakeService, 0)
+		_, _ = fmt.Fprintf(os.Stderr, "%+v\n", protoFile.GetService())
+		svcs := protoFile.GetService()
+		for _, svc := range svcs {
+			_, _ = fmt.Fprintf(os.Stderr, "service: %+v\n", svc)
+			current := &FakeService{
+				Name:            fmt.Sprintf("%sClient", *svc.Name),
 			}
+			methods := make([]Method, 0)
+			for _, mtd := range svc.Method {
+				method := Method{Name: *mtd.Name}
+				if mtd.InputType != nil {
+					method.Input = cleanInput(*mtd.InputType)
+				}
+				if mtd.OutputType != nil {
+					method.Output = cleanInput(*mtd.OutputType)
+				}
+				methods = append(methods, method)
+			}
+			current.Methods = methods
 
-			leadingComments := strings.Split(location.GetLeadingComments(), "\n")
-			if len(location.GetPath()) > 1 && location.GetPath()[0] == int32(4) {
-				message := proto.GetMessageType()[location.GetPath()[1]]
-				println(message.GetName())
-				locationMessages = append(locationMessages, &LocationMessage{
-					Message:  message,
-					Location: location,
-					// Because we are only parsing messages here at the root level we will not get field comments
-					LeadingComments: leadingComments[:len(leadingComments)-1],
-				})
-			}
+			fakeServices = append(fakeServices, current)
 		}
-		ret[filename] = locationMessages
+		ret[*protoFile.Name] = fakeServices
 	}
 	return ret
 }
 
-func (runner *GoExample) CreateMarkdownFile(filename string, messages []*LocationMessage) error {
-	// Create a file and append it to the output files
+func (runner *GoExample) WriteImports(buf *bytes.Buffer, imports... string) {
+	for _, i := range imports {
+		buf.WriteString(fmt.Sprintf("\t\"%s\"\n", i))
+	}
+}
 
+func (runner *GoExample) CreateFakeFile(filename string, fakeSVC []*FakeService) error {
 	var outfileName string
 	var content string
-	outfileName = strings.Replace(filename, ".proto", ".md", -1)
+	outfileName = strings.Replace(filename, ".proto", ".pb.fake.go", -1)
 	var mdFile plugin.CodeGeneratorResponse_File
 	mdFile.Name = &outfileName
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("# %s\n", outfileName))
-	for _, locationMessage := range messages {
-		buf.WriteString(fmt.Sprintf("\n## %s\n", locationMessage.Message.GetName()))
-		buf.WriteString(fmt.Sprintf("### %s\n", "Leading Comments"))
-		for _, comment := range locationMessage.LeadingComments {
-			buf.WriteString(fmt.Sprintf("%s\n", comment))
+
+	pkg := runner.Parameters["package"]
+	pkgPath := runner.Parameters["packagePath"]
+
+	buf.WriteString("package fake\n\n")
+	buf.WriteString("import (\n")
+	runner.WriteImports(&buf, "context", "google.golang.org/grpc")
+	buf.WriteString(fmt.Sprintf("\t%s \"%s\"\n", pkg, pkgPath))
+	buf.WriteString(")\n")
+	for _, fakeSVC := range fakeSVC {
+		buf.WriteString(fmt.Sprintf("\ntype Fake%s struct {\n", fakeSVC.Name))
+		for _, mtd := range fakeSVC.Methods {
+			buf.WriteString(fmt.Sprintf("\tFake%s func(ctx context.Context, in *%s.%s, opts ...grpc.CallOption) (*%s.%s, error)\n",
+				mtd.Name, pkg, mtd.Input, pkg, mtd.Output))
 		}
-		if len(locationMessage.Message.NestedType) > 0 {
-			buf.WriteString(fmt.Sprintf("### %s\n", "Nested Messages"))
-			for _, nestedMessage := range locationMessage.Message.NestedType {
-				buf.WriteString(fmt.Sprintf("#### %s\n", nestedMessage.GetName()))
-				buf.WriteString(fmt.Sprintf("#### %s\n", "Fields"))
-				for _, field := range nestedMessage.Field {
-					buf.WriteString(fmt.Sprintf("%s - %s\n", field.GetName(), field.GetLabel()))
-				}
-			}
-		}
-		for _, field := range locationMessage.Message.Field {
-			buf.WriteString(fmt.Sprintf("%s - %s\n", field.GetName(), field.GetLabel()))
+		buf.WriteString("}\n\n")
+		for _, mtd := range fakeSVC.Methods {
+			buf.WriteString(fmt.Sprintf("func (f *Fake%s) %s(ctx context.Context, in *%s.%s, opts ...grpc.CallOption) (*%s.%s, error) {\n",
+				fakeSVC.Name, mtd.Name, pkg, mtd.Input, pkg, mtd.Output))
+			buf.WriteString(fmt.Sprintf("\treturn f.Fake%s(ctx, in, opts...)\n",
+				mtd.Name))
+			buf.WriteString("}\n\n")
 		}
 	}
 	content = buf.String()
 	mdFile.Content = &content
 	runner.Response.File = append(runner.Response.File, &mdFile)
-	os.Stderr.WriteString(fmt.Sprintf("Created File: %s", filename))
 	return nil
 }
 
 func (runner *GoExample) generateMessageMarkdown() error {
 	// This convenience method will return a structure of some types that I use
-	fileLocationMessageMap := runner.getLocationMessage()
-	for filename, locationMessages := range fileLocationMessageMap {
-		runner.CreateMarkdownFile(filename, locationMessages)
+	for filename, locationMessages := range runner.getLocationMessage() {
+		runner.CreateFakeFile(filename, locationMessages)
 	}
 	return nil
 }
@@ -142,11 +155,9 @@ func (runner *GoExample) generateCode() error {
 	files := make([]*plugin.CodeGeneratorResponse_File, 0)
 	runner.Response.File = files
 
-	{
-		err := runner.generateMessageMarkdown()
-		if err != nil {
-			return err
-		}
+	err := runner.generateMessageMarkdown()
+	if err != nil {
+		return err
 	}
 	return nil
 }

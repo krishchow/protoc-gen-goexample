@@ -1,7 +1,5 @@
-module github.com/drekle/protoc-gen-goexample
+module github.com/krishchow/protoc-gen-gofake
 
-go 1.14
+go 1.15
 
-require (
-	github.com/golang/protobuf v1.4.0
-)
+require github.com/golang/protobuf v1.4.3
