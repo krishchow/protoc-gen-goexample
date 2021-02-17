@@ -1,23 +1,9 @@
 /*
 If this program is on the path of your machine you can invoke it in the following way:
 
-protoc --plugin protoc-gen-goexample --goexample_out=output example.proto
+protoc --plugin protoc-gen-gofake --goexample_out=package=cosi,packagePath=sigs.k8s.io/container-object-storage-interface-spec:fake cosi.proto
 
-Note that the `goexample` term is both the last portion of the binary build and the first portion of the out argument.
-If you named your plugin `protoc-gen-poodle` then you would need to invoke that plugin by:
-
-protoc --plugin protoc-gen-poodle --poodle_out=output example.proto
-
-Parameters may be set for additional information
-
-protoc --plugin protoc-gen-goexample --goexample_out=param1=value1,param2=value2:output example.proto
-
-I believe an equivalent, cleaner, way to do this would be using the opt argument
-
-protoc --plugin ./protoc-gen-goexample --goexample_out=output --goexample_opt=param1=value1,param2=value2 example.proto
-
-Parameters shall apply to multiple files.  See an example in generateCode for applying settings to individual message types using annotations.
-
+Requires package, and packagePath to be specified
 */
 package main
 
@@ -34,7 +20,7 @@ import (
 	plugin "github.com/golang/protobuf/protoc-gen-go/plugin"
 )
 
-type GoExample struct {
+type GoFake struct {
 	Request    *plugin.CodeGeneratorRequest
 	Response   *plugin.CodeGeneratorResponse
 	Parameters map[string]string
@@ -51,7 +37,7 @@ type Method struct {
 	Output string
 }
 
-func (runner *GoExample) PrintParameters(w io.Writer) {
+func (runner *GoFake) PrintParameters(w io.Writer) {
 	const padding = 3
 	tw := tabwriter.NewWriter(w, 0, 0, padding, ' ', tabwriter.TabIndent)
 	fmt.Fprintf(tw, "Parameters:\n")
@@ -67,7 +53,7 @@ func cleanInput(val string) string {
 	return spl[len(spl)-1]
 }
 
-func (runner *GoExample) getLocationMessage() map[string][]*FakeService {
+func (runner *GoFake) getLocationMessage() map[string][]*FakeService {
 	ret := make(map[string][]*FakeService)
 	for _, protoFile := range runner.Request.ProtoFile {
 		_, _ = fmt.Fprintf(os.Stderr, "%s\n", *protoFile.Name)
@@ -99,13 +85,13 @@ func (runner *GoExample) getLocationMessage() map[string][]*FakeService {
 	return ret
 }
 
-func (runner *GoExample) WriteImports(buf *bytes.Buffer, imports... string) {
+func (runner *GoFake) WriteImports(buf *bytes.Buffer, imports... string) {
 	for _, i := range imports {
 		buf.WriteString(fmt.Sprintf("\t\"%s\"\n", i))
 	}
 }
 
-func (runner *GoExample) CreateFakeFile(filename string, fakeSVC []*FakeService) error {
+func (runner *GoFake) CreateFakeFile(filename string, fakeSVC []*FakeService) error {
 	var outfileName string
 	var content string
 	outfileName = strings.Replace(filename, ".proto", ".pb.fake.go", -1)
@@ -120,9 +106,9 @@ func (runner *GoExample) CreateFakeFile(filename string, fakeSVC []*FakeService)
 	buf.WriteString("import (\n")
 	runner.WriteImports(&buf, "context", "google.golang.org/grpc")
 	buf.WriteString(fmt.Sprintf("\t%s \"%s\"\n", pkg, pkgPath))
-	buf.WriteString(")\n")
+	buf.WriteString(")\n\n")
 	for _, fakeSVC := range fakeSVC {
-		buf.WriteString(fmt.Sprintf("\ntype Fake%s struct {\n", fakeSVC.Name))
+		buf.WriteString(fmt.Sprintf("type Fake%s struct {\n", fakeSVC.Name))
 		for _, mtd := range fakeSVC.Methods {
 			buf.WriteString(fmt.Sprintf("\tFake%s func(ctx context.Context, in *%s.%s, opts ...grpc.CallOption) (*%s.%s, error)\n",
 				mtd.Name, pkg, mtd.Input, pkg, mtd.Output))
@@ -142,7 +128,7 @@ func (runner *GoExample) CreateFakeFile(filename string, fakeSVC []*FakeService)
 	return nil
 }
 
-func (runner *GoExample) generateMessageMarkdown() error {
+func (runner *GoFake) generateMessageMarkdown() error {
 	// This convenience method will return a structure of some types that I use
 	for filename, locationMessages := range runner.getLocationMessage() {
 		runner.CreateFakeFile(filename, locationMessages)
@@ -150,7 +136,7 @@ func (runner *GoExample) generateMessageMarkdown() error {
 	return nil
 }
 
-func (runner *GoExample) generateCode() error {
+func (runner *GoFake) generateCode() error {
 	// Initialize the output file slice
 	files := make([]*plugin.CodeGeneratorResponse_File, 0)
 	runner.Response.File = files
@@ -182,7 +168,7 @@ func main() {
 	// The first is by parameters.  Another may be using leading comments in the proto files which I will cover in generateCode.
 	parameters := req.GetParameter()
 	// =grpc,import_path=mypackage:.
-	exampleRunner := &GoExample{
+	exampleRunner := &GoFake{
 		Request:    req,
 		Response:   resp,
 		Parameters: make(map[string]string),
